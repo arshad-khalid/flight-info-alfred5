@@ -3,7 +3,7 @@
 # Flight Info Workflow for Alfred
 # Requires: jq, curl (install via 'brew install jq curl')
 
-API_KEY="b69f7ea6c694cf24d6f877b7f49d98e8"
+API_KEY="YOUR_API_KEY"
 QUERY=$(echo "$1" | tr '[:lower:]' '[:upper:]' | tr -d ' ')
 
 show_error() {
