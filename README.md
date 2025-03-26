@@ -26,4 +26,4 @@ This script allows Alfred users to quickly retrieve real-time flight information
   flight QR 3
   ```
 
-This will return the departure and arrival airports, status, scheduled and actual departure times, and delay information.
+This will return the departure and arrival airports, status, scheduled and actual departure times, duration of the flight, and delay information.
