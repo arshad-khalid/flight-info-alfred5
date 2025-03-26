@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# Flight Info Workflow for Alfred
+# Requires: jq, curl (install via 'brew install jq curl')
+
+API_KEY="b69f7ea6c694cf24d6f877b7f49d98e8"
+QUERY=$(echo "$1" | tr '[:lower:]' '[:upper:]' | tr -d ' ')
+
+show_error() {
+  echo '{"items":[{"title":"Error","subtitle":"'"$1"'","valid":false}]}'
+  exit 0
+}
+
+# Input validation
+[[ -z "$QUERY" ]] && echo '{"items":[{"title":"Enter Flight Number","subtitle":"Example: AA123 or BA249","valid":false}]}' && exit 0
+[[ -z "$API_KEY" ]] && show_error "Missing API Key"
+[[ ! "$QUERY" =~ ^[A-Z]{2,3}[0-9]{1,4}$ ]] && echo '{"items":[{"title":"Invalid Format","subtitle":"Use format: AA1234","valid":false}]}' && exit 0
+
+# API call
+RESPONSE=$(curl -s -G \
+  --max-time 5 \
+  --data-urlencode "access_key=$API_KEY" \
+  --data-urlencode "flight_iata=$QUERY" \
+  --data-urlencode "limit=1" \
+  "https://api.aviationstack.com/v1/flights")
+
+FLIGHT_DATA=$(echo "$RESPONSE" | jq -r '.data[0]?')
+[[ "$FLIGHT_DATA" == "null" ]] && show_error "Flight $QUERY not found"
+
+# Airport information extraction
+departure_airport=$(echo "$FLIGHT_DATA" | jq -r '.departure.airport // "Unknown Airport"')
+departure_iata=$(echo "$FLIGHT_DATA" | jq -r '.departure.iata // "?"')
+arrival_airport=$(echo "$FLIGHT_DATA" | jq -r '.arrival.airport // "Unknown Airport"')
+arrival_iata=$(echo "$FLIGHT_DATA" | jq -r '.arrival.iata // "?"')
+
+# Improved timestamp handling
+clean_timestamp() {
+  echo "$1" | sed 's/\.[0-9]*//;s/+00:00/+0000/;s/Z/+0000/;s/"//g'
+}
+
+get_timestamp() {
+  local time_str=$(clean_timestamp "$1")
+  [[ -z "$time_str" || "$time_str" == "null" ]] && echo "0" && return
+  date -j -f "%Y-%m-%dT%H:%M:%S%z" "$time_str" +%s 2>/dev/null || echo "0"
+}
+
+format_display_time() {
+  [[ "$1" == "0" ]] && echo "N/A" && return
+  date -u -j -f "%s" "$1" +"%H:%M UTC" 2>/dev/null || echo "N/A"
+}
+
+# Get times
+dep_ts=$(get_timestamp "$(echo "$FLIGHT_DATA" | jq -r '.departure.actual // .departure.estimated // .departure.scheduled')")
+arr_ts=$(get_timestamp "$(echo "$FLIGHT_DATA" | jq -r '.arrival.actual // .arrival.estimated // .arrival.scheduled')")
+
+# Format display times
+dep_time=$(format_display_time "$dep_ts")
+arr_time=$(format_display_time "$arr_ts")
+
+# Calculate duration
+if [[ $dep_ts -gt 0 && $arr_ts -gt 0 && $arr_ts -gt $dep_ts ]]; then
+  duration_seconds=$(( arr_ts - dep_ts ))
+  hours=$(( duration_seconds / 3600 ))
+  minutes=$(( (duration_seconds % 3600) / 60 ))
+  duration="${hours}h ${minutes}m"
+else
+  duration="Calculating..."
+fi
+
+# Calculate delay
+scheduled_dep_ts=$(get_timestamp "$(echo "$FLIGHT_DATA" | jq -r '.departure.scheduled')")
+delay_seconds=$(( dep_ts - scheduled_dep_ts ))
+delay_minutes=$(( delay_seconds / 60 ))
+delay_text=""
+[[ $delay_minutes -gt 0 ]] && delay_text=" (Delayed by ${delay_minutes}m)"
+
+# Flight status handling
+status=$(echo "$FLIGHT_DATA" | jq -r '.flight_status' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+case $status in
+  "Scheduled") emoji="🟢" ;;
+  "Active") emoji="✈️" ;;
+  "Landed") emoji="🟡" ;;
+  "Cancelled") emoji="🔴" ;;
+  *) emoji="🔵" ;;
+esac
+
+# Build output with airport information
+echo '{
+  "items": [{
+    "title": "'"${emoji} ${QUERY} - ${status}${delay_text}"'",
+    "subtitle": "Dep: '"${departure_airport} (${departure_iata}) ${dep_time}"' → Arr: '"${arrival_airport} (${arrival_iata}) ${arr_time}"' | Duration: '"${duration}"'",
+    "arg": "'"${QUERY}"'",
+    "text": {
+      "copy": "Flight: '"${QUERY}"'\nStatus: '"${status}${delay_text}"'\nDeparture: '"${departure_airport} (${departure_iata}) ${dep_time}"'\nArrival: '"${arrival_airport} (${arrival_iata}) ${arr_time}"'\nDuration: '"${duration}"'"
+    },
+    "mods": {
+      "cmd": {
+        "subtitle": "Scheduled Departure: '"${departure_airport} (${departure_iata}) $(format_display_time "$scheduled_dep_ts")"'",
+        "arg": "'"${QUERY}"'"
+      }
+    }
+  }]
+}'
